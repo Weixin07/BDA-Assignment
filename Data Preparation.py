@@ -1,59 +1,58 @@
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-import numpy as np
+import geopandas as gpd
+from shapely.geometry import Point
 
-# Load the dataset
-file_path = 'tsunamiinundation.xlsx'
-data = pd.read_excel(file_path)
-print("Data loaded successfully. Initial shape:", data.shape)
+## Step 1: Data Selection
+# Load the tsunami data
+tsunami_df = pd.read_csv('runups-2024-05-09_11-13-37_+0800.tsv', sep='\t')
 
-# Data Cleaning
-data.dropna(axis=1, how='all', inplace=True)  # Drop fully empty columns
-print("Columns with all missing values dropped. Shape:", data.shape)
+# Select relevant columns
+columns_of_interest = [
+    'Year', 'Mo', 'Dy', 'Hr', 'Mn', 'Sec', 'Latitude', 'Longitude', 
+    'Earthquake Magnitude', 'Max Water Height (m)', 'Distance From Source (km)'
+]
+tsunami_df = tsunami_df[columns_of_interest]
 
-data.ffill(inplace=True)  # Forward fill for temporal columns
-print("Forward fill applied.")
+## Step 2: Data Cleaning
+# Drop rows with missing values in critical columns
+tsunami_df.dropna(subset=['Max Water Height (m)', 'Earthquake Magnitude', 'Distance From Source (km)', 'Latitude', 'Longitude'], inplace=True)
 
-# Handling missing values for numeric columns specifically
-numeric_columns = data.select_dtypes(include=[np.number]).columns
-imputer = SimpleImputer(strategy='median')
-data[numeric_columns] = imputer.fit_transform(data[numeric_columns])
-print("Missing numeric values imputed.")
+# Handling outliers using IQR for 'Max Water Height (m)'
+Q1 = tsunami_df['Max Water Height (m)'].quantile(0.25)
+Q3 = tsunami_df['Max Water Height (m)'].quantile(0.75)
+IQR = Q3 - Q1
+filter = (tsunami_df['Max Water Height (m)'] >= (Q1 - 1.5 * IQR)) & (tsunami_df['Max Water Height (m)'] <= (Q3 + 1.5 * IQR))
+tsunami_df = tsunami_df[filter]
 
-# Normalize/Standardize numerical columns
-scaler = StandardScaler()
-data[numeric_columns] = scaler.fit_transform(data[numeric_columns])
-print("Numerical data standardized.")
+## Step 3: Integrate Data
+# Load coastline data
+coastline_df = gpd.read_file('ne_10m_coastline.shp')
+# Convert to a more Japan-specific CRS, such as EPSG:2450 for general use across Japan
+coastline_df = coastline_df.to_crs(epsg=2450)
 
-# Categorical data handling: Convert all categorical data to numeric
-categorical_columns = data.select_dtypes(exclude=[np.number]).columns
-for column in categorical_columns:
-    data[column] = data[column].astype('category').cat.codes
-print("Categorical data converted to numeric codes.")
+# Convert tsunami data to GeoDataFrame
+tsunami_gdf = gpd.GeoDataFrame(
+    tsunami_df, geometry=gpd.points_from_xy(tsunami_df.Longitude, tsunami_df.Latitude)
+)
+# Set original CRS to WGS84 and convert to the same local CRS as coastline for accurate distance measurement
+tsunami_gdf.set_crs(epsg=4326, inplace=True)  # WGS84
+tsunami_gdf.to_crs(epsg=2450, inplace=True)  # Convert to a local CRS for Japan
 
-# Check for presence and fill-status of essential date components
-date_components = ['Year', 'Mo', 'Dy', 'Hr', 'Mn', 'Sec']
-required_components = ['Year', 'Mo', 'Dy']  # These are absolutely necessary
-missing_components = [comp for comp in required_components if comp not in data.columns or data[comp].isna().all()]
+# Calculate the nearest coastline for each tsunami event
+tsunami_gdf['coastline_distance'] = tsunami_gdf.geometry.apply(
+    lambda x: coastline_df.distance(x).min()
+)
 
-if not missing_components:
-    # Ensure non-required components are filled with default values if missing
-    default_values = {comp: 0 for comp in date_components if comp not in required_components}
-    data.fillna(default_values, inplace=True)
-    
-    # Attempt datetime conversion
-    try:
-        data['Date'] = pd.to_datetime(data[date_components], errors='coerce')
-        print("Date-Time conversion successful.")
-    except Exception as e:
-        print(f"Failed to convert to datetime: {str(e)}")
-else:
-    print(f"Missing essential date components: {missing_components}. Cannot create datetime object.")
+## Step 4: Format Data
+# Fill NaN with default values or drop them before type conversion to avoid errors
+tsunami_gdf['Year'].fillna(-1, inplace=True)  # -1 or some other sentinel value if NaNs exist
+tsunami_gdf['Mo'].fillna(-1, inplace=True)
+tsunami_gdf['Dy'].fillna(-1, inplace=True)
 
+# Convert to integer types
+tsunami_gdf['Year'] = tsunami_gdf['Year'].astype(int)
+tsunami_gdf['Mo'] = tsunami_gdf['Mo'].astype(int)
+tsunami_gdf['Dy'] = tsunami_gdf['Dy'].astype(int)
 
-# Save the cleaned and transformed data
-cleaned_file_path = 'cleaned_tsunami_data.xlsx'
-data.to_excel(cleaned_file_path, index=False)
-
-print("Data preparation completed. Cleaned data saved to:", cleaned_file_path)
+# Save or continue processing
+tsunami_gdf.to_file("processed_data.gpkg", layer='tsunami', driver="GPKG")
