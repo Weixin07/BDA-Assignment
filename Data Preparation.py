@@ -1,58 +1,71 @@
 import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point
+import numpy as np
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.preprocessing import RobustScaler, PowerTransformer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer, SimpleImputer
+from sklearn.pipeline import Pipeline
 
-## Step 1: Data Selection
-# Load the tsunami data
-tsunami_df = pd.read_csv('runups-2024-05-09_11-13-37_+0800.tsv', sep='\t')
+# Load data
+data_path = 'runups-2024-05-09_11-13-37_+0800.tsv'
+df = pd.read_csv(data_path, sep='\t')
 
-# Select relevant columns
-columns_of_interest = [
-    'Year', 'Mo', 'Dy', 'Hr', 'Mn', 'Sec', 'Latitude', 'Longitude', 
-    'Earthquake Magnitude', 'Max Water Height (m)', 'Distance From Source (km)'
-]
-tsunami_df = tsunami_df[columns_of_interest]
+### Step 1: Select Data
+# Include columns that are critical for the analysis and sorting data by year to respect temporal order
+columns = ['Year', 'Latitude', 'Longitude', 'Earthquake Magnitude', 'Distance From Source (km)', 'Max Water Height (m)']
+df_selected = df[columns].sort_values('Year')
 
-## Step 2: Data Cleaning
-# Drop rows with missing values in critical columns
-tsunami_df.dropna(subset=['Max Water Height (m)', 'Earthquake Magnitude', 'Distance From Source (km)', 'Latitude', 'Longitude'], inplace=True)
+### Step 2: Clean Data
+# Setup for robustness checks with different imputation strategies
+imputers = {
+    'Iterative': IterativeImputer(random_state=42),
+    'Median': SimpleImputer(strategy='median')
+}
 
-# Handling outliers using IQR for 'Max Water Height (m)'
-Q1 = tsunami_df['Max Water Height (m)'].quantile(0.25)
-Q3 = tsunami_df['Max Water Height (m)'].quantile(0.75)
-IQR = Q3 - Q1
-filter = (tsunami_df['Max Water Height (m)'] >= (Q1 - 1.5 * IQR)) & (tsunami_df['Max Water Height (m)'] <= (Q3 + 1.5 * IQR))
-tsunami_df = tsunami_df[filter]
+# Pipeline setup for preprocessing
+scaler = RobustScaler()
+power_transformer = PowerTransformer(method='yeo-johnson')
 
-## Step 3: Integrate Data
-# Load coastline data
-coastline_df = gpd.read_file('ne_10m_coastline.shp')
-# Convert to a more Japan-specific CRS, such as EPSG:2450 for general use across Japan
-coastline_df = coastline_df.to_crs(epsg=2450)
+# Define a function to apply the transformations and return the transformed data and skewness/kurtosis
+def preprocess_and_evaluate(data, imputer):
+    pipeline = Pipeline([
+        ('imputer', imputer),
+        ('scaler', scaler),
+        ('transformer', power_transformer)
+    ])
+    transformed_data = pipeline.fit_transform(data)
+    df_transformed = pd.DataFrame(transformed_data, columns=data.columns)
+    skewness = df_transformed.skew()
+    kurtosis = df_transformed.kurtosis()
+    return df_transformed, skewness, kurtosis
 
-# Convert tsunami data to GeoDataFrame
-tsunami_gdf = gpd.GeoDataFrame(
-    tsunami_df, geometry=gpd.points_from_xy(tsunami_df.Longitude, tsunami_df.Latitude)
-)
-# Set original CRS to WGS84 and convert to the same local CRS as coastline for accurate distance measurement
-tsunami_gdf.set_crs(epsg=4326, inplace=True)  # WGS84
-tsunami_gdf.to_crs(epsg=2450, inplace=True)  # Convert to a local CRS for Japan
+### Data Constructing is skipped as no additional columns are needed
+### Step 3: Integrate Data and Format Data
+# Perform preprocessing with each imputation strategy and evaluate skewness/kurtosis
+for name, imputer in imputers.items():
+    df_prepared, skewness, kurtosis = preprocess_and_evaluate(df_selected, imputer)
+    print(f"Using {name} Imputation:")
+    print("Skewness:\n", skewness)
+    print("Kurtosis:\n", kurtosis)
+    print()
 
-# Calculate the nearest coastline for each tsunami event
-tsunami_gdf['coastline_distance'] = tsunami_gdf.geometry.apply(
-    lambda x: coastline_df.distance(x).min()
-)
+# Choose the imputation strategy based on skewness/kurtosis results
+# Assuming Iterative Imputation was chosen based on evaluation
+final_imputer = imputers['Iterative']
+df_final_prepared, _, _ = preprocess_and_evaluate(df_selected, final_imputer)
 
-## Step 4: Format Data
-# Fill NaN with default values or drop them before type conversion to avoid errors
-tsunami_gdf['Year'].fillna(-1, inplace=True)  # -1 or some other sentinel value if NaNs exist
-tsunami_gdf['Mo'].fillna(-1, inplace=True)
-tsunami_gdf['Dy'].fillna(-1, inplace=True)
+### Step 4: Time Series Cross-Validation
+tscv = TimeSeriesSplit(n_splits=5)
+X = df_final_prepared.drop('Max Water Height (m)', axis=1)
+y = df_final_prepared['Max Water Height (m)']
 
-# Convert to integer types
-tsunami_gdf['Year'] = tsunami_gdf['Year'].astype(int)
-tsunami_gdf['Mo'] = tsunami_gdf['Mo'].astype(int)
-tsunami_gdf['Dy'] = tsunami_gdf['Dy'].astype(int)
+# Performing time series cross-validation
+for train_index, test_index in tscv.split(X):
+    X_train, X_test = X.iloc[train_index], X.iloc[test_index]
+    y_train, y_test = y.iloc[train_index], y.iloc[test_index]
+    # Print training and testing indices to verify correct temporal splitting
+    print("TRAIN:", train_index, "TEST:", test_index)
+    print(X_train.head(), X_test.head())
 
-# Save or continue processing
-tsunami_gdf.to_file("processed_data.gpkg", layer='tsunami', driver="GPKG")
+# Print a summary of the cleaned and integrated dataset
+print(X_train.head())
