@@ -40,7 +40,7 @@ def preprocess_and_evaluate(data, imputer):
     return df_transformed, skewness, kurtosis
 
 ### Data Constructing is skipped as no additional columns are needed
-### Step 3: Integrate Data and Format Data
+### Step 3&4: Integrate Data and Format Data
 # Perform preprocessing with each imputation strategy and evaluate skewness/kurtosis
 for name, imputer in imputers.items():
     df_prepared, skewness, kurtosis = preprocess_and_evaluate(df_selected, imputer)
@@ -50,14 +50,18 @@ for name, imputer in imputers.items():
     print()
 
 # Choose the imputation strategy based on skewness/kurtosis results
-# Assuming Iterative Imputation was chosen based on evaluation
 final_imputer = imputers['Iterative']
 df_final_prepared, _, _ = preprocess_and_evaluate(df_selected, final_imputer)
 
-### Step 4: Time Series Cross-Validation
+#Time Series Cross-Validation
 tscv = TimeSeriesSplit(n_splits=5)
 X = df_final_prepared.drop('Max Water Height (m)', axis=1)
 y = df_final_prepared['Max Water Height (m)']
+
+# Saving the preprocessed dataset to a CSV file
+output_path = 'preprocessed_runups.csv'
+df_final_prepared.to_csv(output_path, index=False)
+print(f"Preprocessed data saved to {output_path}")
 
 # Performing time series cross-validation
 for train_index, test_index in tscv.split(X):
