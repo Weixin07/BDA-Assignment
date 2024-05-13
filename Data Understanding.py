@@ -67,18 +67,3 @@ print("\nBox plot for 'Max Water Height (m)' to identify outliers:")
 plt.figure(figsize=(10, 6))
 sns.boxplot(x=df['Max Water Height (m)'])
 plt.show()
-
-## Additional Step: Handling Missing Data and Outliers
-# Filling missing values with median for numerical columns only
-df_numeric.fillna(df_numeric.median(), inplace=True)
-
-# Removing outliers for 'Max Water Height (m)' using IQR method
-Q1 = df_numeric['Max Water Height (m)'].quantile(0.25)
-Q3 = df_numeric['Max Water Height (m)'].quantile(0.75)
-IQR = Q3 - Q1
-filter = (df_numeric['Max Water Height (m)'] >= Q1 - 1.5 * IQR) & (df_numeric['Max Water Height (m)'] <= Q3 + 1.5 * IQR)
-df_filtered = df_numeric.loc[filter]
-
-print("\nRevised box plot for 'Max Water Height (m)' after outlier removal:")
-sns.boxplot(x=df_filtered['Max Water Height (m)'])
-plt.show()

@@ -39,8 +39,8 @@ def preprocess_and_evaluate(data, imputer):
     kurtosis = df_transformed.kurtosis()
     return df_transformed, skewness, kurtosis
 
-### Data Constructing is skipped as no additional columns are needed
-### Step 3&4: Integrate Data and Format Data
+### Data Constructing and Integrating is skipped as it wasn't necessary
+### Step 3: Format Data
 # Perform preprocessing with each imputation strategy and evaluate skewness/kurtosis
 for name, imputer in imputers.items():
     df_prepared, skewness, kurtosis = preprocess_and_evaluate(df_selected, imputer)
